@@ -1,0 +1,40 @@
+groups:
+  - name: mon
+    rules:
+      # Whole target down — every published endpoint is failing. Real outage.
+      - alert: TargetDown
+        expr: max by (target) (probe_success) == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.target }} is DOWN — all endpoints failing"
+
+      # Some but not all endpoints down (e.g. AAAA advertised but IPv6 not
+      # served). Degraded, not a full outage — warn, don't page. Mutually
+      # exclusive with TargetDown by construction.
+      - alert: EndpointDegraded
+        expr: probe_success == 0 and on (target) (max by (target) (probe_success) == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.target }} endpoint {{ $labels.ip }} ({{ $labels.family }}) is down while others are up"
+
+      # Name resolution itself failing.
+      - alert: DNSFailure
+        expr: probe_dns_success == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DNS resolution failing for {{ $labels.target }}"
+
+      # Sustained availability dip even if up right now (SLO burn).
+      - alert: LowAvailability
+        expr: 100 * avg_over_time(probe_success[1h]) < 99
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.target }} {{ $labels.ip }} ({{ $labels.family }}) availability {{ $value | printf \"%.2f\" }}% over last 1h"

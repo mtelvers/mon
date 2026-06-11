@@ -1,0 +1,38 @@
+# Edge / vantage deployment — runs ONLY the prober (no Prometheus/Grafana/
+# Alertmanager) and pushes results to a central Prometheus via remote_write.
+# Outbound-only: needs no inbound connectivity, so it works behind home
+# NAT / CGNAT (e.g. a Raspberry Pi).
+#
+# Usage (on the edge host, e.g. the Pi):
+#   export MON_CENTRAL=https://mon.example.com/api/v1/write
+#   export MON_AUTH=mon:yourpassword
+#   export MON_VANTAGE=home
+#   docker compose -f docker-compose.edge.yml up -d --build
+#
+# To avoid building on a slow Pi, build once on fast hardware and push a
+# multi-arch image to a registry (see README), then set MON_IMAGE and drop
+# the `build:` line.
+
+services:
+  mon:
+    image: ${MON_IMAGE:-mon-edge}
+    build: .
+    # Use the host's real network stack. Essential for IPv6: a container on the
+    # default Docker bridge is IPv4-only (unless the daemon is set up for IPv6 /
+    # Docker >= 27 NAT66), so without this even a dual-stack host probes AAAA
+    # endpoints as down. host networking also uses the host's DNS, sidestepping
+    # docker-embedded-DNS quirks. The prober is outbound-only; note /metrics
+    # then binds host:9686 (firewall it, or ignore — the edge pushes anyway).
+    network_mode: host
+    command:
+      - -v
+      - --interval=60
+      - --timeout=30
+      - --remote-write=${MON_CENTRAL:?set MON_CENTRAL to the central /api/v1/write URL}
+      - --remote-write-auth=${MON_AUTH:?set MON_AUTH to USER:PASS}
+      - --external-label=vantage=${MON_VANTAGE:-home}
+      # Your targets, one --target per URL:
+      - --target=https://example.com
+    restart: unless-stopped
+    # No published ports: the edge is outbound-only. /metrics still serves on
+    # 9686 inside the container for `docker compose exec mon` debugging.

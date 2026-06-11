@@ -1,0 +1,33 @@
+opam-version: "2.0"
+synopsis: "Blackbox availability/throughput prober exposing Prometheus metrics"
+maintainer: "mark@tarides.com"
+authors: "mark@tarides.com"
+homepage: "https://github.com/mtelvers/mon"
+bug-reports: "https://github.com/mtelvers/mon/issues"
+depends: [
+  "ocaml" {>= "5.1"}
+  "dune" {>= "3.0"}
+  "eio_main"
+  "cohttp-eio" {>= "6.0.0"}
+  "prometheus-eio"
+  "fmt"
+  "logs"
+  "cmdliner"
+  "pbrt"
+  "snappy"
+  "ocaml-protoc" {build}
+  "tls-eio"
+  "ca-certs"
+  "mirage-crypto-rng"
+  "x509"
+  "domain-name"
+]
+pin-depends: [
+  ["prometheus.dev" "git+https://github.com/mtelvers/prometheus.git#proto/backend-agnostic"]
+  ["prometheus-app.dev" "git+https://github.com/mtelvers/prometheus.git#proto/backend-agnostic"]
+  ["prometheus-cohttp.dev" "git+https://github.com/mtelvers/prometheus.git#proto/backend-agnostic"]
+  ["prometheus-eio.dev" "git+https://github.com/mtelvers/prometheus.git#proto/backend-agnostic"]
+]
+build: [
+  ["dune" "build" "-p" name "-j" jobs]
+]

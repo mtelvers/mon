@@ -1,0 +1,19 @@
+# Build output
+_build/
+
+# Local secrets / operational config — never publish. Copy the committed
+# *.example files and fill these in for your own deployment.
+.env
+docker-compose.yml
+prometheus/web.yml
+grafana/provisioning/datasources/datasource.yml
+alertmanager/alertmanager.yml
+alertmanager/slack_url
+
+# Misc
+*.bak*
+screenshot.png
+
+# Local / machine-specific build + tooling state
+.day10
+.claude/

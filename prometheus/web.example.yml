@@ -1,0 +1,12 @@
+# Copy to prometheus/web.yml. Protects ALL Prometheus HTTP endpoints (the
+# remote_write receiver and the query API), so the prober and Grafana must
+# authenticate.
+#
+# Generate a bcrypt hash for your password:
+#   docker run --rm httpd:2.4-alpine htpasswd -nbBC 10 mon 'yourpassword'
+# Put the password itself in .env (PROM_BASIC_AUTH_PASSWORD / MON_REMOTE_WRITE_AUTH).
+#
+# For an internet-facing receiver, terminate TLS in front (e.g. Caddy) or add a
+# tls_server_config block here.
+basic_auth_users:
+  mon: $2y$10$REPLACE_WITH_YOUR_OWN_BCRYPT_HASH______________________________

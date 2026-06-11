@@ -1,0 +1,99 @@
+# Central stack: prober (vantage) + Prometheus (remote_write receiver, behind
+# basic auth) + Alertmanager + Grafana. Copy to docker-compose.yml, set your
+# targets below, and provide a .env (see .env.example).
+#
+# Also copy the *.example config files:
+#   prometheus/web.example.yml                          -> prometheus/web.yml
+#   grafana/provisioning/datasources/datasource.example.yml
+#                                                       -> .../datasource.yml
+#   alertmanager/alertmanager.example.yml               -> alertmanager/alertmanager.yml
+#   alertmanager/slack_url.example                      -> alertmanager/slack_url
+
+x-dns: &dns
+  # If your host's /etc/resolv.conf points only at a local stub (e.g.
+  # systemd-resolved 127.0.0.53), Docker's embedded resolver can't forward to
+  # it from a user-defined network. Point it at a real upstream. Drop this
+  # block if your resolver is already a normal address.
+  dns:
+    - 1.1.1.1
+    - 8.8.8.8
+
+services:
+  mon:
+    <<: *dns
+    build: .
+    command:
+      - -v
+      - --port=9686
+      - --interval=60
+      - --timeout=30
+      - --remote-write=http://prometheus:9090/api/v1/write
+      - --remote-write-auth=${MON_REMOTE_WRITE_AUTH}
+      - --external-label=vantage=local
+      # Your targets, one --target per URL:
+      - --target=https://example.com
+    restart: unless-stopped
+
+  prometheus:
+    <<: *dns
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./prometheus/web.yml:/etc/prometheus/web.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=90d
+      - --web.enable-remote-write-receiver
+      - --web.config.file=/etc/prometheus/web.yml
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    depends_on:
+      - mon
+
+  alertmanager:
+    <<: *dns
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/slack_url:/etc/alertmanager/slack_url:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+
+  grafana:
+    <<: *dns
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # consumed by datasource provisioning (basic auth to Prometheus)
+      PROM_BASIC_AUTH_PASSWORD: ${PROM_BASIC_AUTH_PASSWORD}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  alertmanager-data:
+
+networks:
+  # IPv6 egress so the prober can reach AAAA endpoints; without this a container
+  # on the default bridge has no IPv6 route and reports every AAAA as down.
+  default:
+    enable_ipv6: true

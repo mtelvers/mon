@@ -1,0 +1,5 @@
+(executable
+ (name main)
+ (libraries eio_main cohttp cohttp-eio http uri prometheus prometheus-eio mon_pb
+   pbrt snappy tls-eio ca-certs mirage-crypto-rng.unix x509 domain-name fmt
+   fmt.cli fmt.tty logs logs.fmt logs.cli cmdliner))

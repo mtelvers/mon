@@ -1,0 +1,12 @@
+(library
+ (name mon_pb)
+ (libraries pbrt)
+ ; generated protobuf code — silence all warnings
+ (flags
+  (:standard -w -a)))
+
+(rule
+ (targets remote.ml remote.mli)
+ (deps remote.proto)
+ (action
+  (run ocaml-protoc --binary --ml_out . remote.proto)))

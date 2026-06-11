@@ -1,0 +1,142 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "title": "mon — endpoint reliability",
+  "uid": "mon-reliability",
+  "schemaVersion": 39,
+  "tags": ["mon", "blackbox"],
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "vantage",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": { "query": "label_values(probe_success, vantage)", "refId": "vars" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" },
+        "sort": 1
+      },
+      {
+        "name": "target",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": { "query": "label_values(probe_dns_success, target)", "refId": "vars" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" },
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "table",
+      "title": "All endpoints — overview (by vantage)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 },
+      "options": { "showHeader": true, "sortBy": [ { "displayName": "Avail %", "desc": false } ] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "format": "table", "instant": true, "range": false,
+          "expr": "max by (target, ip, family, vantage) (probe_success{target=~\"$target\", vantage=~\"$vantage\"})" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "format": "table", "instant": true, "range": false,
+          "expr": "100 * max by (target, ip, family, vantage) (avg_over_time(probe_success{target=~\"$target\", vantage=~\"$vantage\"}[$__range]))" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "prometheus" }, "format": "table", "instant": true, "range": false,
+          "expr": "max by (target, ip, family, vantage) (probe_http_status_code{target=~\"$target\", vantage=~\"$vantage\"})" },
+        { "refId": "D", "datasource": { "type": "prometheus", "uid": "prometheus" }, "format": "table", "instant": true, "range": false,
+          "expr": "max by (target, ip, family, vantage) (probe_curl_exit_code{target=~\"$target\", vantage=~\"$vantage\"})" },
+        { "refId": "E", "datasource": { "type": "prometheus", "uid": "prometheus" }, "format": "table", "instant": true, "range": false,
+          "expr": "max by (target, ip, family, vantage) (probe_last_duration_seconds{target=~\"$target\", vantage=~\"$vantage\"})" }
+      ],
+      "transformations": [
+        { "id": "merge", "options": {} },
+        { "id": "organize", "options": {
+            "renameByName": {
+              "vantage": "Vantage", "target": "Target", "ip": "Endpoint", "family": "Family",
+              "Value #A": "Up", "Value #B": "Avail %", "Value #C": "HTTP",
+              "Value #D": "curl exit", "Value #E": "last (s)"
+            },
+            "indexByName": {
+              "Vantage": 0, "Target": 1, "Endpoint": 2, "Family": 3, "Up": 4,
+              "Avail %": 5, "HTTP": 6, "curl exit": 7, "last (s)": 8
+            },
+            "excludeByName": { "Time": true }
+        } }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto", "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Up" },
+            "properties": [
+              { "id": "mappings", "value": [ { "type": "value", "options": { "1": { "text": "UP", "color": "green" }, "0": { "text": "DOWN", "color": "red" } } } ] },
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "custom.width", "value": 80 }
+            ] },
+          { "matcher": { "id": "byName", "options": "Avail %" },
+            "properties": [
+              { "id": "unit", "value": "percent" }, { "id": "decimals", "value": 2 },
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 95 }, { "color": "green", "value": 99 } ] } }
+            ] },
+          { "matcher": { "id": "byName", "options": "last (s)" },
+            "properties": [ { "id": "unit", "value": "s" }, { "id": "decimals", "value": 3 } ] }
+        ]
+      }
+    },
+    {
+      "type": "row",
+      "title": "$target",
+      "collapsed": false,
+      "repeat": "target",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 12 }
+    },
+    {
+      "type": "state-timeline",
+      "title": "Up / down — $target",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 13 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [ { "type": "value", "options": { "0": { "text": "down", "color": "red" }, "1": { "text": "up", "color": "green" } } } ]
+        }
+      },
+      "options": { "mergeValues": true, "showValue": "never", "rowHeight": 0.9 },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "probe_success{target=~\"$target\", vantage=~\"$vantage\"}",
+          "legendFormat": "{{vantage}} · {{ip}} ({{family}})" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Request duration — $target",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 13 },
+      "fieldConfig": { "defaults": { "min": 0, "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "auto" } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "probe_last_duration_seconds{target=~\"$target\", vantage=~\"$vantage\"}",
+          "legendFormat": "{{vantage}} · {{ip}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Download throughput — $target",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 13 },
+      "fieldConfig": { "defaults": { "min": 0, "unit": "Bps", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "auto" } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "probe_last_download_speed_bytes_per_second{target=~\"$target\", vantage=~\"$vantage\"}",
+          "legendFormat": "{{vantage}} · {{ip}}" }
+      ]
+    }
+  ]
+}

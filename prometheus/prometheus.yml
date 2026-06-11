@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 60s
+  evaluation_interval: 60s
+
+# Accept remote_write samples timestamped in the past (backfill after an
+# edge↔central outage replays its FIFO). Bounds how long an outage can be
+# fully recovered.
+storage:
+  tsdb:
+    out_of_order_time_window: 30m
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+# No scrape_configs: metrics arrive via remote_write (the prober pushes,
+# labelled by vantage). Each vantage runs a prober that pushes here.

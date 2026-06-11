@@ -1,0 +1,17 @@
+apiVersion: 1
+
+# Copy to datasource.yml. The password is read from the grafana container's
+# environment (PROM_BASIC_AUTH_PASSWORD, set in docker-compose) — Grafana
+# expands $VARS in provisioning files — so no secret is stored here.
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    uid: prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    basicAuth: true
+    basicAuthUser: mon
+    secureJsonData:
+      basicAuthPassword: $PROM_BASIC_AUTH_PASSWORD
