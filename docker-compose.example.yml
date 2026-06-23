@@ -30,8 +30,10 @@ services:
       - --remote-write=http://prometheus:9090/api/v1/write
       - --remote-write-auth=${MON_REMOTE_WRITE_AUTH}
       - --external-label=vantage=local
-      # Your targets, one --target per URL:
+      # Your targets, one --target per URL (probed per published IP):
       - --target=https://example.com
+      # For CDN / load-balanced hosts (rotating IPs), use --pooled-target:
+      # - --pooled-target=https://cdn.example.com
     restart: unless-stopped
 
   prometheus:

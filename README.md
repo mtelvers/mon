@@ -74,7 +74,7 @@ Copy the example config (these hold no secrets in git — you fill them in):
 cp .env.example .env                                                   # set passwords
 cp docker-compose.example.yml docker-compose.yml                       # set your targets
 cp prometheus/web.example.yml prometheus/web.yml                       # bcrypt of PROM password
-cp grafana/provisioning/datasources/datasource.example.yml \
+cp grafana/provisioning/datasources/datasource.yml.example \
    grafana/provisioning/datasources/datasource.yml
 cp alertmanager/alertmanager.example.yml alertmanager/alertmanager.yml
 cp alertmanager/slack_url.example alertmanager/slack_url               # your Slack webhook
@@ -100,7 +100,8 @@ curl -s localhost:9686/metrics | grep '^probe_'
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--target` / `-t` | `https://get.dune.build/install` | URL to probe (repeatable) |
+| `--target` / `-t` | (none) | URL to probe per published A/AAAA endpoint (repeatable) |
+| `--pooled-target` | (none) | URL to probe once per address family (curl resolves; `ip=pool`). For CDN/load-balanced hosts with rotating IPs — avoids unbounded `ip`-label churn (repeatable) |
 | `--interval` / `-i` | `30` | Seconds between probes of each target |
 | `--timeout` | `30` | curl `--max-time`; a slower probe counts as a failure |
 | `--port` / `-p` | `9686` | Port to serve `/metrics` on |

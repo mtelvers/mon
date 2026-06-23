@@ -86,7 +86,17 @@ let keep_family = function
   | Only_v4 -> ( function V4 -> true | V6 -> false)
   | Only_v6 -> ( function V6 -> true | V4 -> false)
 
-type endpoint = { url : string; host : string; port : int; ip : string; family : family }
+(* [pinned] true: probe this exact IP via curl --resolve (one series per IP,
+   for fixed backends). false: "pooled" — let curl pick an IP for the family
+   (CDN / load-balanced hosts with rotating IPs), labelled ip="pool". *)
+type endpoint = {
+  url : string;
+  host : string;
+  port : int;
+  ip : string;
+  family : family;
+  pinned : bool;
+}
 
 (* Parse curl's [-w] output ([key=value] per line) into an assoc list. *)
 let parse out =
@@ -106,7 +116,13 @@ let getf fields k =
 
 (* Run curl once against [url], pinned to a single endpoint via --resolve.
    [-f] makes an HTTP >= 400 a failure, mirroring [curl -fsSL]. *)
-let run_curl ~mgr ~timeout ~resolve url =
+let run_curl ~mgr ~timeout ~mode url =
+  let addr_args =
+    match mode with
+    | `Pinned resolve -> [ "--resolve"; resolve ]
+    | `Family V4 -> [ "-4" ]
+    | `Family V6 -> [ "-6" ]
+  in
   let out = Buffer.create 512 and err = Buffer.create 256 in
   let status =
     Eio.Switch.run @@ fun sw ->
@@ -114,8 +130,9 @@ let run_curl ~mgr ~timeout ~resolve url =
       Eio.Process.spawn ~sw mgr
         ~stdout:(Eio.Flow.buffer_sink out)
         ~stderr:(Eio.Flow.buffer_sink err)
-        [ "curl"; "-f"; "-s"; "-S"; "-L"; "--resolve"; resolve; "--max-time";
-          Printf.sprintf "%g" timeout; "-o"; "/dev/null"; "-w"; write_out; url ]
+        ([ "curl"; "-f"; "-s"; "-S"; "-L" ] @ addr_args
+        @ [ "--max-time"; Printf.sprintf "%g" timeout; "-o"; "/dev/null"; "-w";
+            write_out; url ])
     in
     Eio.Process.await child
   in
@@ -125,11 +142,13 @@ let run_curl ~mgr ~timeout ~resolve url =
 let probe_endpoint ~mgr ~timeout e =
   let l = [ e.url; e.ip; family_to_string e.family ] in
   Counter.inc_one (Counter.labels attempts_total l);
-  let resolve =
-    let addr = match e.family with V6 -> "[" ^ e.ip ^ "]" | V4 -> e.ip in
-    Printf.sprintf "%s:%d:%s" e.host e.port addr
+  let mode =
+    if e.pinned then
+      let addr = match e.family with V6 -> "[" ^ e.ip ^ "]" | V4 -> e.ip in
+      `Pinned (Printf.sprintf "%s:%d:%s" e.host e.port addr)
+    else `Family e.family
   in
-  let exit_code, t, stderr = run_curl ~mgr ~timeout ~resolve e.url in
+  let exit_code, t, stderr = run_curl ~mgr ~timeout ~mode e.url in
   let success = exit_code = 0 in
   Gauge.set (Gauge.labels success_g l) (if success then 1. else 0.);
   Gauge.set (Gauge.labels exit_code_g l) (float_of_int exit_code);
@@ -161,8 +180,11 @@ let split_url url =
   in
   (host, port)
 
-(* Resolve all published addresses for [url]'s host, then probe each. *)
-let probe_target ~keep ~net ~mgr ~timeout url =
+(* Resolve [url]'s host, then probe. [pinned] targets get one probe per
+   resolved IP (labelled by ip); [pooled] (CDN/LB) targets get one probe per
+   address family with curl resolving, labelled ip="pool" — bounded cardinality
+   despite rotating IPs, while still distinguishing IPv4/IPv6 reachability. *)
+let probe_target ~pooled ~keep ~net ~mgr ~timeout url =
   let host, port = split_url url in
   match Eio.Net.getaddrinfo_stream ~service:(string_of_int port) net host with
   | exception (Eio.Cancel.Cancelled _ as exn) -> raise exn
@@ -171,7 +193,7 @@ let probe_target ~keep ~net ~mgr ~timeout url =
       Gauge.set (dns_addresses_g url) 0.;
       Logs.warn (fun f -> f "%s DNS resolution failed: %a" url Fmt.exn ex)
   | addrs ->
-      let ips =
+      let resolved =
         List.filter_map (function `Tcp (ip, _) -> Some ip | _ -> None) addrs
         |> List.map (fun ip ->
                let family = Eio.Net.Ipaddr.fold ~v4:(fun _ -> V4) ~v6:(fun _ -> V6) ip in
@@ -179,29 +201,39 @@ let probe_target ~keep ~net ~mgr ~timeout url =
         |> List.sort_uniq compare
         |> List.filter (fun (_, family) -> keep family)
       in
+      let endpoints =
+        if pooled then
+          List.map snd resolved |> List.sort_uniq compare
+          |> List.map (fun family -> { url; host; port; ip = "pool"; family; pinned = false })
+        else
+          List.map
+            (fun (ip, family) -> { url; host; port; ip; family; pinned = true })
+            resolved
+      in
       Gauge.set (dns_success_g url) 1.;
-      Gauge.set (dns_addresses_g url) (float_of_int (List.length ips));
-      Eio.Fiber.List.iter
-        (fun (ip, family) -> probe_endpoint ~mgr ~timeout { url; host; port; ip; family })
-        ips
+      Gauge.set (dns_addresses_g url) (float_of_int (List.length endpoints));
+      Eio.Fiber.List.iter (probe_endpoint ~mgr ~timeout) endpoints
 
-let rec target_loop ~keep ~clock ~net ~mgr ~interval ~timeout url =
-  (try probe_target ~keep ~net ~mgr ~timeout url
+let rec target_loop ~pooled ~keep ~clock ~net ~mgr ~interval ~timeout url =
+  (try probe_target ~pooled ~keep ~net ~mgr ~timeout url
    with
    | Eio.Cancel.Cancelled _ as exn -> raise exn
    | ex ->
      Gauge.set (dns_success_g url) 0.;
      Logs.err (fun f -> f "probe %s raised: %a" url Fmt.exn ex));
   Eio.Time.sleep clock interval;
-  target_loop ~keep ~clock ~net ~mgr ~interval ~timeout url
+  target_loop ~pooled ~keep ~clock ~net ~mgr ~interval ~timeout url
 
 let setup_log style_renderer level =
   Fmt_tty.setup_std_outputs ?style_renderer ();
   Logs.set_level level;
   Logs.set_reporter (Logs_fmt.reporter ())
 
-let main () targets interval timeout port proto remote_write auth rw_insecure extra_labels =
+let main () targets pooled_targets interval timeout port proto remote_write auth
+    rw_insecure extra_labels =
   Mirage_crypto_rng_unix.use_default ();
+  if targets = [] && pooled_targets = [] then
+    Logs.warn (fun f -> f "no targets given (use --target / --pooled-target)");
   let keep = keep_family proto in
   Eio_main.run @@ fun env ->
   let net = Eio.Stdenv.net env in
@@ -220,8 +252,11 @@ let main () targets interval timeout port proto remote_write auth rw_insecure ex
   in
   let probes =
     List.map
-      (fun url () -> target_loop ~keep ~clock ~net ~mgr ~interval ~timeout url)
+      (fun url () -> target_loop ~pooled:false ~keep ~clock ~net ~mgr ~interval ~timeout url)
       targets
+    @ List.map
+        (fun url () -> target_loop ~pooled:true ~keep ~clock ~net ~mgr ~interval ~timeout url)
+        pooled_targets
   in
   let push =
     match remote_write with
@@ -232,8 +267,8 @@ let main () targets interval timeout port proto remote_write auth rw_insecure ex
               ~extra_labels ()) ]
   in
   Logs.info (fun f ->
-      f "Probing %d target(s) every %gs (curl --max-time %gs), each endpoint"
-        (List.length targets) interval timeout);
+      f "Probing %d pinned + %d pooled target(s) every %gs (curl --max-time %gs)"
+        (List.length targets) (List.length pooled_targets) interval timeout);
   Eio.Fiber.all ((serve :: probes) @ push)
 
 open Cmdliner
@@ -260,10 +295,11 @@ let setup_log_t =
 
 let targets =
   Arg.(
-    value
-    & opt_all string [ "https://get.dune.build/install" ]
+    value & opt_all string []
     & info [ "t"; "target" ] ~docv:"URL"
-        ~doc:"URL to probe (repeatable). Defaults to get.dune.build/install.")
+        ~doc:
+          "URL to probe per published IP (repeatable). For CDN / load-balanced \
+           hosts whose IPs rotate, use --pooled-target instead.")
 
 let interval =
   Arg.(
@@ -282,6 +318,15 @@ let port =
     value & opt int 9686
     & info [ "p"; "port" ] ~docv:"PORT" ~absent:"9686"
         ~doc:"Port to serve /metrics on.")
+
+let pooled_targets =
+  Arg.(
+    value & opt_all string []
+    & info [ "pooled-target" ] ~docv:"URL"
+        ~doc:
+          "CDN / load-balanced target: probe once per address family (curl \
+           resolves; no per-IP pinning, labelled ip=pool). Use for hosts whose \
+           IPs rotate, to avoid unbounded ip-label churn. Repeatable.")
 
 let proto =
   Arg.(
@@ -335,8 +380,8 @@ let cmd =
   in
   let info = Cmd.info "mon" ~doc ~man in
   Cmd.v info
-    Term.(const main $ setup_log_t $ targets $ interval $ timeout $ port $ proto
-         $ remote_write $ remote_write_auth $ remote_write_insecure
+    Term.(const main $ setup_log_t $ targets $ pooled_targets $ interval $ timeout
+         $ port $ proto $ remote_write $ remote_write_auth $ remote_write_insecure
          $ external_labels)
 
 let () = exit (Cmd.eval cmd)

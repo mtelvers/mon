@@ -1,40 +1,43 @@
 groups:
   - name: mon
     rules:
-      # Whole target down — every published endpoint is failing. Real outage.
+      # Whole target down — every endpoint, from every vantage — sustained.
       - alert: TargetDown
         expr: max by (target) (probe_success) == 0
-        for: 3m
-        labels:
-          severity: critical
-        annotations:
-          summary: "{{ $labels.target }} is DOWN — all endpoints failing"
-
-      # Some but not all endpoints down (e.g. AAAA advertised but IPv6 not
-      # served). Degraded, not a full outage — warn, don't page. Mutually
-      # exclusive with TargetDown by construction.
-      - alert: EndpointDegraded
-        expr: probe_success == 0 and on (target) (max by (target) (probe_success) == 1)
         for: 5m
         labels:
-          severity: warning
-        annotations:
-          summary: "{{ $labels.target }} endpoint {{ $labels.ip }} ({{ $labels.family }}) is down while others are up"
-
-      # Name resolution itself failing.
-      - alert: DNSFailure
-        expr: probe_dns_success == 0
-        for: 3m
-        labels:
           severity: critical
         annotations:
-          summary: "DNS resolution failing for {{ $labels.target }}"
+          summary: "{{ $labels.target }} is DOWN from all vantages"
 
-      # Sustained availability dip even if up right now (SLO burn).
-      - alert: LowAvailability
-        expr: 100 * avg_over_time(probe_success[1h]) < 99
+      # A specific endpoint is down from ALL vantages (e.g. an AAAA that isn't
+      # served) while the target still has another working endpoint. Down from
+      # only one vantage (a path blip) does NOT fire this — that's not the
+      # target's fault, it's a route problem and shouldn't page/warn.
+      - alert: EndpointDegraded
+        expr: max by (target, ip, family) (probe_success) == 0 and on (target) (max by (target) (probe_success) == 1)
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.target }} {{ $labels.ip }} ({{ $labels.family }}) availability {{ $value | printf \"%.2f\" }}% over last 1h"
+          summary: "{{ $labels.target }} endpoint {{ $labels.ip }} ({{ $labels.family }}) is down from all vantages"
+
+      # Name resolution failing from a vantage, sustained.
+      - alert: DNSFailure
+        expr: probe_dns_success == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DNS resolution failing for {{ $labels.target }} (vantage {{ $labels.vantage }})"
+
+      # Sustained availability burn — deliberately loose so blips don't fire:
+      # an endpoint must be unavailable for roughly 18 min within the last 6h
+      # (from a given vantage) before this warns.
+      - alert: LowAvailability
+        expr: 100 * avg_over_time(probe_success[6h]) < 95
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.target }} {{ $labels.ip }} ({{ $labels.family }}) only {{ $value | printf \"%.1f\" }}% available over 6h from {{ $labels.vantage }}"

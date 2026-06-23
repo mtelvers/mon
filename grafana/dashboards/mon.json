@@ -122,7 +122,7 @@
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "probe_last_duration_seconds{target=~\"$target\", vantage=~\"$vantage\"}",
-          "legendFormat": "{{vantage}} · {{ip}}" }
+          "legendFormat": "{{vantage}} · {{ip}} ({{family}})" }
       ]
     },
     {
@@ -135,7 +135,7 @@
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "probe_last_download_speed_bytes_per_second{target=~\"$target\", vantage=~\"$vantage\"}",
-          "legendFormat": "{{vantage}} · {{ip}}" }
+          "legendFormat": "{{vantage}} · {{ip}} ({{family}})" }
       ]
     }
   ]
