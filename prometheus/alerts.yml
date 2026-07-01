@@ -31,13 +31,16 @@ groups:
         annotations:
           summary: "DNS resolution failing for {{ $labels.target }} (vantage {{ $labels.vantage }})"
 
-      # Sustained availability burn — deliberately loose so blips don't fire:
-      # an endpoint must be unavailable for roughly 18 min within the last 6h
-      # (from a given vantage) before this warns.
+      # Sustained-but-current low availability. Requires BOTH a 1h window
+      # (filters blips — needs real, repeated failures) AND a 10m window, so the
+      # alert clears ~10m after recovery instead of lagging for hours behind a
+      # long trailing average. Avoids firing "on the way back up".
       - alert: LowAvailability
-        expr: 100 * avg_over_time(probe_success[6h]) < 95
-        for: 15m
+        expr: >-
+          100 * avg_over_time(probe_success[10m]) < 95
+          and 100 * avg_over_time(probe_success[1h]) < 95
+        for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.target }} {{ $labels.ip }} ({{ $labels.family }}) only {{ $value | printf \"%.1f\" }}% available over 6h from {{ $labels.vantage }}"
+          summary: "{{ $labels.target }} {{ $labels.ip }} ({{ $labels.family }}) degraded — {{ $value | printf \"%.1f\" }}% available (last 10m) from {{ $labels.vantage }}"
