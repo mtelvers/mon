@@ -27,6 +27,7 @@ services:
       - --port=9686
       - --interval=60
       - --timeout=30
+      - --max-download=65536          # cap body per probe; large pages still count up
       - --remote-write=http://prometheus:9090/api/v1/write
       - --remote-write-auth=${MON_REMOTE_WRITE_AUTH}
       - --external-label=vantage=local

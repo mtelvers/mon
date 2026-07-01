@@ -106,6 +106,8 @@ curl -s localhost:9686/metrics | grep '^probe_'
 | `--timeout` | `30` | curl `--max-time`; a slower probe counts as a failure |
 | `--port` / `-p` | `9686` | Port to serve `/metrics` on |
 | `-4` / `-6` | both | Probe IPv4 (A) or IPv6 (AAAA) endpoints only (ping-style; mutually exclusive) |
+| `--max-download` | unlimited | Cap body bytes per probe (`curl --max-filesize`); an over-cap response still counts **up** (server responded) but isn't fully downloaded — saves bandwidth on large pages |
+| `--user-agent` / `-A` | `mon/1.0 …` | User-Agent header for probes (some sites block the default `curl/*` UA) |
 
 ## Handy PromQL
 

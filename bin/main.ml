@@ -114,14 +114,22 @@ let getf fields k =
   | Some s -> Option.value ~default:0. (float_of_string_opt s)
   | None -> 0.
 
-(* Run curl once against [url], pinned to a single endpoint via --resolve.
-   [-f] makes an HTTP >= 400 a failure, mirroring [curl -fsSL]. *)
+(* Process-wide probe config, set once from the CLI in [main]. *)
+let user_agent = ref "mon/1.0 (+https://github.com/mtelvers/mon)"
+let max_download = ref 0 (* bytes; 0 = no cap (curl --max-filesize) *)
+
+(* Run curl once against [url]. [-f] makes HTTP >= 400 a failure (mirroring
+   [curl -fsSL]); with --max-filesize a body larger than the cap aborts with
+   exit 63 (handled as "up, body capped" by the caller). *)
 let run_curl ~mgr ~timeout ~mode url =
   let addr_args =
     match mode with
     | `Pinned resolve -> [ "--resolve"; resolve ]
     | `Family V4 -> [ "-4" ]
     | `Family V6 -> [ "-6" ]
+  in
+  let cap_args =
+    if !max_download > 0 then [ "--max-filesize"; string_of_int !max_download ] else []
   in
   let out = Buffer.create 512 and err = Buffer.create 256 in
   let status =
@@ -130,7 +138,7 @@ let run_curl ~mgr ~timeout ~mode url =
       Eio.Process.spawn ~sw mgr
         ~stdout:(Eio.Flow.buffer_sink out)
         ~stderr:(Eio.Flow.buffer_sink err)
-        ([ "curl"; "-f"; "-s"; "-S"; "-L" ] @ addr_args
+        ([ "curl"; "-f"; "-s"; "-S"; "-L"; "-A"; !user_agent ] @ addr_args @ cap_args
         @ [ "--max-time"; Printf.sprintf "%g" timeout; "-o"; "/dev/null"; "-w";
             write_out; url ])
     in
@@ -149,7 +157,9 @@ let probe_endpoint ~mgr ~timeout e =
     else `Family e.family
   in
   let exit_code, t, stderr = run_curl ~mgr ~timeout ~mode e.url in
-  let success = exit_code = 0 in
+  (* 63 = --max-filesize hit: the server responded fine, we just declined to
+     download an over-cap body. Treat as up (no download-size/throughput). *)
+  let success = exit_code = 0 || exit_code = 63 in
   Gauge.set (Gauge.labels success_g l) (if success then 1. else 0.);
   Gauge.set (Gauge.labels exit_code_g l) (float_of_int exit_code);
   Gauge.set (Gauge.labels http_status_g l) (getf t "code");
@@ -163,8 +173,9 @@ let probe_endpoint ~mgr ~timeout e =
 
   if success then
     Logs.info (fun f ->
-        f "%s [%s] ok: %.0fB in %.3fs (%.0f B/s, http %.0f)" e.url e.ip
-          (getf t "size") total (getf t "speed") (getf t "code"))
+        f "%s [%s] ok: %.0fB in %.3fs (%.0f B/s, http %.0f)%s" e.url e.ip
+          (getf t "size") total (getf t "speed") (getf t "code")
+          (if exit_code = 63 then " [body capped]" else ""))
   else
     Logs.warn (fun f ->
         f "%s [%s] FAILED: curl exit %d (http %.0f) after %.3fs%s" e.url e.ip
@@ -230,8 +241,10 @@ let setup_log style_renderer level =
   Logs.set_reporter (Logs_fmt.reporter ())
 
 let main () targets pooled_targets interval timeout port proto remote_write auth
-    rw_insecure extra_labels =
+    rw_insecure extra_labels max_dl ua =
   Mirage_crypto_rng_unix.use_default ();
+  max_download := max_dl;
+  user_agent := ua;
   if targets = [] && pooled_targets = [] then
     Logs.warn (fun f -> f "no targets given (use --target / --pooled-target)");
   let keep = keep_family proto in
@@ -350,6 +363,21 @@ let remote_write_auth =
     & info [ "remote-write-auth" ] ~docv:"USER:PASS"
         ~doc:"HTTP basic-auth credentials for the remote_write endpoint.")
 
+let max_download =
+  Arg.(
+    value & opt int 0
+    & info [ "max-download" ] ~docv:"BYTES" ~absent:"unlimited"
+        ~doc:
+          "Cap the body downloaded per probe (curl --max-filesize). A response \
+           larger than this still counts as up (the server responded) but isn't \
+           fully downloaded — saves bandwidth on large pages. 0 = no cap.")
+
+let user_agent =
+  Arg.(
+    value & opt string "mon/1.0 (+https://github.com/mtelvers/mon)"
+    & info [ "user-agent"; "A" ] ~docv:"UA"
+        ~doc:"User-Agent header sent by probes (some sites block the default curl UA).")
+
 let remote_write_insecure =
   Arg.(
     value & flag
@@ -382,6 +410,6 @@ let cmd =
   Cmd.v info
     Term.(const main $ setup_log_t $ targets $ pooled_targets $ interval $ timeout
          $ port $ proto $ remote_write $ remote_write_auth $ remote_write_insecure
-         $ external_labels)
+         $ external_labels $ max_download $ user_agent)
 
 let () = exit (Cmd.eval cmd)
